@@ -1,0 +1,140 @@
+version: '3.8'
+
+services:
+  # CardFlow Backend API
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cardflow-api
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - DATABASE_URL=postgresql://cardflow:cardflow_secret@postgres:5432/cardflow?schema=public
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - cardflow-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3001/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: cardflow-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=cardflow
+      - POSTGRES_PASSWORD=cardflow_secret
+      - POSTGRES_DB=cardflow
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - cardflow-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cardflow -d cardflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache & Queue
+  redis:
+    image: redis:7-alpine
+    container_name: cardflow-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    networks:
+      - cardflow-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # BullMQ Dashboard (Development only)
+  bull-board:
+    image: venatum/bull-board:latest
+    container_name: cardflow-bull-board
+    restart: unless-stopped
+    ports:
+      - "3002:3000"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      - redis
+    networks:
+      - cardflow-network
+    profiles:
+      - development
+
+  # MinIO (S3-compatible storage for development)
+  minio:
+    image: minio/minio:latest
+    container_name: cardflow-minio
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - MINIO_ROOT_USER=cardflow_minio
+      - MINIO_ROOT_PASSWORD=cardflow_minio_secret
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    networks:
+      - cardflow-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    profiles:
+      - development
+
+  # Mailhog (Email testing for development)
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: cardflow-mailhog
+    restart: unless-stopped
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+    networks:
+      - cardflow-network
+    profiles:
+      - development
+
+networks:
+  cardflow-network:
+    driver: bridge
+    name: cardflow-network
+
+volumes:
+  postgres_data:
+    name: cardflow-postgres-data
+  redis_data:
+    name: cardflow-redis-data
+  minio_data:
+    name: cardflow-minio-data
