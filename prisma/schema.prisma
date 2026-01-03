@@ -1,0 +1,569 @@
+// CardFlow - Digital Business Cards Platform
+// Prisma Schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== ENUMS ====================
+
+enum PlanType {
+  BASIC
+  PRO
+  ENTERPRISE
+}
+
+enum UserRole {
+  OWNER       // System owner (super admin)
+  ADMIN       // Company admin
+  EMPLOYEE    // Company employee
+  INDIVIDUAL  // Individual user (Basic plan)
+}
+
+enum SubscriptionStatus {
+  TRIAL
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+  EXPIRED
+}
+
+enum InvitationType {
+  EMAIL
+  LINK
+  CODE
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  CANCELLED
+}
+
+enum PaymentProvider {
+  PAYPAL
+  MERCADOPAGO
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  LOGIN
+  LOGOUT
+  PASSWORD_CHANGE
+  SETTINGS_CHANGE
+  INVITATION_SENT
+  INVITATION_ACCEPTED
+  CARD_SHARED
+  EXPORT_GENERATED
+  PLAN_CHANGED
+  PAYMENT_PROCESSED
+}
+
+enum PhoneType {
+  MOBILE
+  WORK
+  HOME
+  FAX
+  OTHER
+}
+
+enum EmailType {
+  WORK
+  PERSONAL
+  OTHER
+}
+
+enum AnalyticsEventType {
+  VIEW
+  CLICK_PHONE
+  CLICK_EMAIL
+  CLICK_SOCIAL
+  CLICK_LINK
+  VCARD_DOWNLOAD
+  SHARE_QR
+  SHARE_LINK
+  SHARE_WHATSAPP
+  SHARE_SMS
+  SHARE_EMAIL
+  SHARE_NFC
+  SHARE_BLUETOOTH
+}
+
+// ==================== CORE MODELS ====================
+
+model User {
+  id                   String    @id @default(uuid())
+  email                String    @unique
+  passwordHash         String
+  firstName            String
+  lastName             String
+  phone                String?
+  avatar               String?
+  role                 UserRole  @default(INDIVIDUAL)
+  isEmailVerified      Boolean   @default(false)
+  emailVerifyToken     String?
+  emailVerifyExpires   DateTime?
+  passwordResetToken   String?
+  passwordResetExpires DateTime?
+  twoFactorEnabled     Boolean   @default(false)
+  twoFactorCode        String?
+  twoFactorExpires     DateTime?
+  timezone             String    @default("America/Mexico_City")
+  language             String    @default("es")
+  lastLoginAt          DateTime?
+  isActive             Boolean   @default(true)
+  deletedAt            DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  // Relations
+  company       Company?  @relation("CompanyAdmin", fields: [companyId], references: [id])
+  companyId     String?
+  employeeOf    Company?  @relation("CompanyEmployees", fields: [employeeOfId], references: [id])
+  employeeOfId  String?
+  department    Department? @relation(fields: [departmentId], references: [id])
+  departmentId  String?
+  subscription  Subscription?
+  cards         Card[]
+  sentInvitations Invitation[] @relation("SentInvitations")
+  auditLogs     AuditLog[]
+  sessions      Session[]
+
+  @@index([email])
+  @@index([companyId])
+  @@index([employeeOfId])
+  @@index([isActive])
+  @@index([deletedAt])
+}
+
+model Session {
+  id           String   @id @default(uuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token        String   @unique
+  refreshToken String   @unique
+  userAgent    String?
+  ipAddress    String?
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  @@index([userId])
+  @@index([token])
+  @@index([refreshToken])
+  @@index([expiresAt])
+}
+
+model Company {
+  id                    String    @id @default(uuid())
+  name                  String
+  slug                  String    @unique
+  industry              String?
+  website               String?
+  description           String?
+
+  // Branding
+  logo                  String?
+  primaryColor          String    @default("#0ea5e9")
+  secondaryColor        String    @default("#1f2937")
+  fontFamily            String    @default("Inter")
+  coverImage            String?
+
+  // Template configuration (inheritable)
+  templateConfig        Json      @default("{}")
+
+  // Locked fields (array of field names)
+  lockedFields          String[]  @default([])
+
+  // Custom domain (premium feature)
+  customDomain          String?   @unique
+  customDomainVerified  Boolean   @default(false)
+
+  isActive              Boolean   @default(true)
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  // Relations
+  admin        User?         @relation("CompanyAdmin")
+  employees    User[]        @relation("CompanyEmployees")
+  departments  Department[]
+  cards        Card[]
+  invitations  Invitation[]
+  subscription Subscription?
+
+  @@index([slug])
+  @@index([customDomain])
+  @@index([isActive])
+}
+
+model Department {
+  id           String   @id @default(uuid())
+  name         String
+  description  String?
+  lockedFields String[] @default([])
+  companyId    String
+  company      Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employees    User[]
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([companyId, name])
+  @@index([companyId])
+}
+
+// ==================== CARDS ====================
+
+model Card {
+  id              String    @id @default(uuid())
+  slug            String    @unique
+
+  // Basic information
+  firstName       String
+  lastName        String
+  jobTitle        String?
+  bio             String?
+
+  // Images
+  profilePhoto    String?
+  coverImage      String?
+
+  // Address
+  addressStreet   String?
+  addressCity     String?
+  addressState    String?
+  addressZipCode  String?
+  addressCountry  String?
+
+  // QR Code (generated once)
+  qrCodeUrl       String?
+
+  // Customization
+  primaryColor    String?
+  backgroundColor String?
+  fontFamily      String?
+
+  // Status
+  isActive        Boolean   @default(true)
+
+  // Relations
+  userId          String
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  companyId       String?
+  company         Company?  @relation(fields: [companyId], references: [id])
+
+  // Dynamic data
+  phones          CardPhone[]
+  emails          CardEmail[]
+  socialLinks     CardSocialLink[]
+  customLinks     CardCustomLink[]
+
+  // Tracking
+  analytics       AnalyticsEvent[]
+  shareEvents     ShareEvent[]
+
+  // History
+  history         CardHistory[]
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([slug])
+  @@index([userId])
+  @@index([companyId])
+  @@index([isActive])
+}
+
+model CardPhone {
+  id      String    @id @default(uuid())
+  type    PhoneType @default(MOBILE)
+  number  String
+  label   String?
+  order   Int       @default(0)
+  cardId  String
+  card    Card      @relation(fields: [cardId], references: [id], onDelete: Cascade)
+
+  @@index([cardId])
+}
+
+model CardEmail {
+  id      String    @id @default(uuid())
+  type    EmailType @default(WORK)
+  email   String
+  label   String?
+  order   Int       @default(0)
+  cardId  String
+  card    Card      @relation(fields: [cardId], references: [id], onDelete: Cascade)
+
+  @@index([cardId])
+}
+
+model CardSocialLink {
+  id          String  @id @default(uuid())
+  platform    String
+  url         String
+  displayName String?
+  order       Int     @default(0)
+  cardId      String
+  card        Card    @relation(fields: [cardId], references: [id], onDelete: Cascade)
+
+  @@index([cardId])
+}
+
+model CardCustomLink {
+  id      String  @id @default(uuid())
+  title   String
+  url     String
+  icon    String?
+  order   Int     @default(0)
+  cardId  String
+  card    Card    @relation(fields: [cardId], references: [id], onDelete: Cascade)
+
+  @@index([cardId])
+}
+
+model CardHistory {
+  id         String   @id @default(uuid())
+  cardId     String
+  card       Card     @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  changedBy  String
+  changeType String
+  changes    Json
+  createdAt  DateTime @default(now())
+
+  @@index([cardId])
+  @@index([createdAt])
+}
+
+// ==================== PLANS & BILLING ====================
+
+model Plan {
+  id                String   @id @default(uuid())
+  name              String   @unique
+  type              PlanType @unique
+  description       String?
+  priceMonthly      Decimal  @db.Decimal(10, 2)
+  priceYearly       Decimal? @db.Decimal(10, 2)
+
+  // Limits (null = unlimited for Enterprise)
+  maxCards          Int?
+  maxEmployees      Int?
+
+  // Features
+  customDomain      Boolean  @default(false)
+  advancedAnalytics Boolean  @default(false)
+  prioritySupport   Boolean  @default(false)
+
+  isActive          Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  subscriptions     Subscription[]
+}
+
+model Subscription {
+  id                   String             @id @default(uuid())
+  status               SubscriptionStatus @default(TRIAL)
+
+  // Trial
+  trialEndsAt          DateTime?
+
+  // Billing
+  currentPeriodStart   DateTime?
+  currentPeriodEnd     DateTime?
+  cancelledAt          DateTime?
+
+  // Limit overrides (for super admin adjustments)
+  maxCardsOverride     Int?
+  maxEmployeesOverride Int?
+
+  // Relations
+  planId               String
+  plan                 Plan     @relation(fields: [planId], references: [id])
+  userId               String?  @unique
+  user                 User?    @relation(fields: [userId], references: [id])
+  companyId            String?  @unique
+  company              Company? @relation(fields: [companyId], references: [id])
+
+  payments             Payment[]
+  paymentMethods       PaymentMethod[]
+
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@index([status])
+  @@index([planId])
+}
+
+model PaymentMethod {
+  id                 String          @id @default(uuid())
+  provider           PaymentProvider
+  providerCustomerId String?
+  providerMethodId   String?
+  isDefault          Boolean         @default(false)
+  lastFour           String?
+  expiresAt          DateTime?
+
+  subscriptionId     String
+  subscription       Subscription    @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  @@index([subscriptionId])
+}
+
+model Payment {
+  id                String          @id @default(uuid())
+  provider          PaymentProvider
+  providerPaymentId String?
+  amount            Decimal         @db.Decimal(10, 2)
+  currency          String          @default("USD")
+  status            PaymentStatus   @default(PENDING)
+  failureReason     String?
+
+  // Invoicing
+  invoiceNumber     String?         @unique
+  invoiceUrl        String?
+
+  subscriptionId    String
+  subscription      Subscription    @relation(fields: [subscriptionId], references: [id])
+
+  paidAt            DateTime?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@index([subscriptionId])
+  @@index([status])
+  @@index([invoiceNumber])
+}
+
+// ==================== INVITATIONS ====================
+
+model Invitation {
+  id           String           @id @default(uuid())
+  type         InvitationType   @default(EMAIL)
+  status       InvitationStatus @default(PENDING)
+
+  email        String?
+  code         String?          @unique
+  token        String           @unique
+
+  role         UserRole         @default(EMPLOYEE)
+  departmentId String?
+
+  expiresAt    DateTime
+  acceptedAt   DateTime?
+
+  // Relations
+  companyId    String
+  company      Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  invitedById  String
+  invitedBy    User     @relation("SentInvitations", fields: [invitedById], references: [id])
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([token])
+  @@index([code])
+  @@index([companyId])
+  @@index([status])
+  @@index([email])
+}
+
+// ==================== ANALYTICS ====================
+
+model AnalyticsEvent {
+  id         String             @id @default(uuid())
+  type       AnalyticsEventType
+
+  // Visitor information
+  ipAddress  String?
+  userAgent  String?
+  referer    String?
+  country    String?
+  city       String?
+  deviceType String?
+  browser    String?
+  os         String?
+
+  // Additional metadata
+  metadata   Json?
+
+  cardId     String
+  card       Card     @relation(fields: [cardId], references: [id], onDelete: Cascade)
+
+  createdAt  DateTime @default(now())
+
+  @@index([cardId])
+  @@index([type])
+  @@index([createdAt])
+  @@index([cardId, createdAt])
+  @@index([cardId, type])
+}
+
+model ShareEvent {
+  id         String   @id @default(uuid())
+  method     String
+
+  cardId     String
+  card       Card     @relation(fields: [cardId], references: [id], onDelete: Cascade)
+
+  sharedById String?
+
+  createdAt  DateTime @default(now())
+
+  @@index([cardId])
+  @@index([createdAt])
+  @@index([method])
+}
+
+// ==================== AUDIT ====================
+
+model AuditLog {
+  id         String      @id @default(uuid())
+  action     AuditAction
+  entityType String
+  entityId   String?
+
+  oldValues  Json?
+  newValues  Json?
+
+  ipAddress  String?
+  userAgent  String?
+
+  userId     String
+  user       User        @relation(fields: [userId], references: [id])
+
+  createdAt  DateTime    @default(now())
+
+  @@index([userId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@index([action])
+}
+
+// ==================== SYSTEM ====================
+
+model SystemConfig {
+  id        String   @id @default(uuid())
+  key       String   @unique
+  value     Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([key])
+}
